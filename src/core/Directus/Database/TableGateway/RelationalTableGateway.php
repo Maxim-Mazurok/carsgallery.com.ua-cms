@@ -1135,7 +1135,7 @@ class RelationalTableGateway extends BaseTableGateway
         $single = ArrayUtils::get($params, 'single');
         $idsCount = is_array($id) ? count($id) : 1;
 
-        if (!$single && $id && $idsCount == 1) {
+        if (!$single && $id !== null && $idsCount == 1) {
             $single = $params['single'] = true;
         }
 
@@ -1407,7 +1407,23 @@ class RelationalTableGateway extends BaseTableGateway
         }
 
         // TODO: Move this into QueryBuilder if possible
-        if (in_array($operator, ['like']) && $field->isManyToOne()) {
+        if($field->isOneToMany()){
+            $relationship = $field->getRelationship();
+            $relatedTable = $relationship->getCollectionMany();
+            $relatedRightColumn = $relationship->getFieldMany();
+            $tableSchema = SchemaService::getCollection($relatedTable);
+            $relatedTableColumns = $tableSchema->getFields();  
+            
+            $query->orWhereRelational($this->primaryKeyFieldName, $relatedTable, null, $relatedRightColumn, function(Builder $query) use ($column, $relatedTable, $relatedTableColumns, $value) {
+                foreach ($relatedTableColumns as $column) {
+                    $isNumeric = $this->getSchemaManager()->isNumericType($column->getType());
+                    $isString = $this->getSchemaManager()->isStringType($column->getType());
+                    if (!$column->isAlias() && ($isNumeric || $isString)) {
+                        $query->orWhereLike($column->getName(), $value);
+                    }
+                }
+            });
+        } else if(in_array($operator, ['like']) && $field->isManyToOne()) {
             $relatedTable = $field->getRelationship()->getCollectionOne();
             $tableSchema = SchemaService::getCollection($relatedTable);
             $relatedTableColumns = $tableSchema->getFields();
@@ -1638,7 +1654,8 @@ class RelationalTableGateway extends BaseTableGateway
                 $entriesIds = [$entriesIds];
             }
 
-            $query->whereIn($this->primaryKeyFieldName, $entriesIds);
+            //$query->whereIn($this->primaryKeyFieldName, $entriesIds);
+            $query->whereIn(new Expression('CAST('.$this->primaryKeyFieldName.' as CHAR)'), $entriesIds);
         }
 
         if (!ArrayUtils::has($params, 'q')) {
@@ -1755,7 +1772,7 @@ class RelationalTableGateway extends BaseTableGateway
                 // $row->getId(); RowGateway perhaps?
                 $relationalColumnId = $row[$relationalColumnName];
                 if (is_array($relationalColumnId) && !empty($relationalColumnId)) {
-                    $relationalColumnId = $relationalColumnId[$tableGateway->primaryKeyFieldName];
+                    $relationalColumnId = $relationalColumnId[$primaryKey];
                 }
 
                 if ($filterFields && !in_array('*', $filterFields)) {
@@ -1892,7 +1909,8 @@ class RelationalTableGateway extends BaseTableGateway
             foreach ($entries as &$parentRow) {
                 if (array_key_exists($relationalColumnName, $parentRow)) {
                     // @NOTE: Not always will be a integer
-                    $foreign_id = (int)$parentRow[$relationalColumnName];
+                    // @NOTE: But what about UUIDS and slugs?
+                    $foreign_id = (string)$parentRow[$relationalColumnName];
                     $parentRow[$relationalColumnName] = null;
                     // "Did we retrieve the foreign row with this foreign ID in our recent query of the foreign table"?
                     if (array_key_exists($foreign_id, $relatedEntries)) {
